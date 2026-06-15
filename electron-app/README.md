@@ -162,10 +162,14 @@ The OAuth token is read from your existing Claude Code login:
 
 - **Pick him up** — click and drag Pip anywhere on screen; let go and he drops back to the
   ground and carries on walking. (Disabled while Click-Through is on.)
+- **Right-click Pip** — opens the menu (Quit, Size, …) right at the cursor. Handy on GNOME,
+  where the tray icon may be hidden without an AppIndicator extension.
+- Only **one** Pip runs at a time — launching again just focuses the existing one, so you
+  never end up with several you can't quit.
 
 ## Tray menu
 
-Click the 🐾 tray icon for:
+Right-click Pip, or click the 🐾 tray icon, for:
 
 - **Toggle Pause** / **Toggle Click-Through** (let clicks pass through Pip)
 - **Size** — resize Pip: Small (0.8×), Normal (1×), Large (1.3×), Huge (1.6×)

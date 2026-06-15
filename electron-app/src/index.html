@@ -354,6 +354,12 @@
     canvas.addEventListener('pointerup', releasePip);
     canvas.addEventListener('pointercancel', releasePip);
 
+    // Right-click Pip → the tray menu (Quit, Size, …) at the cursor.
+    canvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (window.pip) window.pip.showContextMenu();
+    });
+
     // ── Start! ────────────────────────────────────────────────────────────
     init().catch(err => {
       console.error('Init failed:', err);

@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('pip', {
   getPlatform: () => ipcRenderer.invoke('get-platform'),
   getScreenInfo: () => ipcRenderer.invoke('get-screen-info'),
   moveWindow: (x, y) => ipcRenderer.send('move-window', x, y),
+  showContextMenu: () => ipcRenderer.send('show-context-menu'),
   onTogglePause: (cb) => ipcRenderer.on('toggle-pause', (e) => cb()),
   onToggleClickThrough: (cb) => ipcRenderer.on('toggle-click-through', (e) => cb()),
   onRefreshUsage: (cb) => ipcRenderer.on('refresh-usage', (e) => cb()),

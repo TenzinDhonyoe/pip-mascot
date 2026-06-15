@@ -156,15 +156,14 @@ function createTray() {
   refreshTrayMenu();
 }
 
-// Rebuilt whenever state changes (e.g. size) so radio checkmarks stay in sync.
-function refreshTrayMenu() {
-  if (!tray) return;
+// Build the menu shown both from the tray icon and from right-clicking Pip.
+function buildMenu() {
   const sizeOption = (label, value) => ({
     label, type: 'radio',
     checked: Math.abs(pipScale - value) < 0.001,
     click: () => setScale(value)
   });
-  const menu = Menu.buildFromTemplate([
+  return Menu.buildFromTemplate([
     { label: `${MASCOT_NAME} 🐾`, enabled: false },
     { type: 'separator' },
     { label: 'Toggle Pause', click: togglePause },
@@ -181,7 +180,12 @@ function refreshTrayMenu() {
     { type: 'separator' },
     { label: `Quit ${MASCOT_NAME}`, click: () => { app.quit(); } }
   ]);
-  tray.setContextMenu(menu);
+}
+
+// Rebuilt whenever state changes (e.g. size) so radio checkmarks stay in sync.
+function refreshTrayMenu() {
+  if (!tray) return;
+  tray.setContextMenu(buildMenu());
 }
 
 let paused = false;
@@ -235,6 +239,12 @@ ipcMain.on('move-window', (event, x, y) => {
   if (win && !win.isDestroyed()) {
     win.setPosition(Math.round(x), Math.round(y));
   }
+});
+
+// Right-clicking Pip opens the same menu as the tray — handy when the desktop
+// hides the tray icon (e.g. GNOME without an AppIndicator extension).
+ipcMain.on('show-context-menu', () => {
+  buildMenu().popup();
 });
 
 ipcMain.handle('get-screen-info', () => {
@@ -304,10 +314,17 @@ ipcMain.handle('poll-usage', async () => {
 });
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
-app.whenReady().then(() => {
-  createTray();
-  createWindow();
-});
+// Only allow one Pip at a time — a second launch just exits, so you never end up
+// with several mascots you can't all quit.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => { /* already running; keep the existing one */ });
+  app.whenReady().then(() => {
+    createTray();
+    createWindow();
+  });
+}
 
 app.on('window-all-closed', () => {
   // Don't quit on window close; stay in tray
