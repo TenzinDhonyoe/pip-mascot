@@ -244,7 +244,7 @@ ipcMain.on('move-window', (event, x, y) => {
 // Right-clicking Pip opens the same menu as the tray — handy when the desktop
 // hides the tray icon (e.g. GNOME without an AppIndicator extension).
 ipcMain.on('show-context-menu', () => {
-  buildMenu().popup();
+  buildMenu().popup(mainWindow ? { window: mainWindow } : undefined);
 });
 
 ipcMain.handle('get-screen-info', () => {
