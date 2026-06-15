@@ -146,6 +146,14 @@
     let currentWindowY = 0;
     let pipScale = 1;  // set from the tray "Size" menu; scales the window geometry
 
+    // Drag-to-pickup state. While `drag.active`, the pointer handlers own the window
+    // position; after release `dropping` runs a short gravity fall back to the ground.
+    const drag = { active: false, grabX: 0, grabY: 0, lastX: 0, lastY: 0, lastT: 0 };
+    let dropping = false;
+    let dropVy = 0;
+    const DROP_GRAVITY = 2800;   // px/s²
+    const DROP_TERMINAL = 3000;  // px/s
+
     // ── Wire pose → canvas + bubble ────────────────────────────────────────
     engine.onPoseUpdate((pose) => {
       renderer.draw(pose);
@@ -201,16 +209,34 @@
 
         engine.tick(timestamp);
 
-        if ((engine.facing > 0 && engine.x >= maxX) ||
-            (engine.facing < 0 && engine.x <= minX)) {
-          if (engine.state === 'walking') engine.beginTurn();
-        }
+        const groundY = screenInfo.y + screenInfo.height - 230 * pipScale + 1;
 
-        if (Math.abs(engine.x - currentWindowX) > 0.5) {
-          currentWindowX = engine.x;
-          const groundY = screenInfo.y + screenInfo.height - 230 * pipScale + 1;
-          currentWindowY = groundY + (engine.state === 'peeking' || engine.state === 'tuckingIn' ? 72 * pipScale : 0);
+        if (drag.active) {
+          // Pointer handlers move the window while Pip is held; nothing to do here.
+        } else if (dropping) {
+          // Gravity fall back to the ground after being let go.
+          const dt = 1 / 60;
+          dropVy = Math.min(DROP_TERMINAL, dropVy + DROP_GRAVITY * dt);
+          currentWindowY += dropVy * dt;
+          if (currentWindowY >= groundY) {
+            currentWindowY = groundY;
+            dropping = false;
+            dropVy = 0;
+            engine.endDrag();  // play the landing squash, then resume walking
+            setTimeout(() => { if (engine.state === 'landing') engine.state = 'walking'; }, 550);
+          }
           if (window.pip) window.pip.moveWindow(currentWindowX, currentWindowY);
+        } else {
+          if ((engine.facing > 0 && engine.x >= maxX) ||
+              (engine.facing < 0 && engine.x <= minX)) {
+            if (engine.state === 'walking') engine.beginTurn();
+          }
+
+          if (Math.abs(engine.x - currentWindowX) > 0.5) {
+            currentWindowX = engine.x;
+            currentWindowY = groundY + (engine.state === 'peeking' || engine.state === 'tuckingIn' ? 72 * pipScale : 0);
+            if (window.pip) window.pip.moveWindow(currentWindowX, currentWindowY);
+          }
         }
 
         // Log every 2 seconds
@@ -288,6 +314,45 @@
         currentWindowX = -1e9;
       });
     }
+
+    // ── Drag: pick Pip up and carry him anywhere ────────────────────────────
+    // Pointer capture keeps events flowing even when the cursor outruns the window.
+    canvas.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+      drag.active = true;
+      dropping = false;
+      drag.grabX = e.screenX - currentWindowX;
+      drag.grabY = e.screenY - currentWindowY;
+      drag.lastX = e.screenX;
+      drag.lastY = e.screenY;
+      drag.lastT = performance.now() / 1000;
+      engine.beginDrag();
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!drag.active) return;
+      const now = performance.now() / 1000;
+      engine.noteDragMove(e.screenX - drag.lastX, e.screenY - drag.lastY, now - drag.lastT);
+      drag.lastX = e.screenX;
+      drag.lastY = e.screenY;
+      drag.lastT = now;
+      currentWindowX = e.screenX - drag.grabX;
+      currentWindowY = e.screenY - drag.grabY;
+      engine.x = currentWindowX;  // keep the engine's horizontal position in sync
+      if (window.pip) window.pip.moveWindow(currentWindowX, currentWindowY);
+    });
+
+    function releasePip(e) {
+      if (!drag.active) return;
+      drag.active = false;
+      try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      dropVy = Math.max(0, engine.dragVY || 0);  // carry any downward throw velocity
+      dropping = true;
+      engine.state = 'falling';
+    }
+    canvas.addEventListener('pointerup', releasePip);
+    canvas.addEventListener('pointercancel', releasePip);
 
     // ── Start! ────────────────────────────────────────────────────────────
     init().catch(err => {

@@ -158,6 +158,11 @@ The OAuth token is read from your existing Claude Code login:
 
 ---
 
+## Interacting with Pip
+
+- **Pick him up** — click and drag Pip anywhere on screen; let go and he drops back to the
+  ground and carries on walking. (Disabled while Click-Through is on.)
+
 ## Tray menu
 
 Click the 🐾 tray icon for:
