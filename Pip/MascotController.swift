@@ -2,6 +2,24 @@ import AppKit
 import SwiftUI
 import QuartzCore
 import ServiceManagement
+import ApplicationServices
+
+/// Apps that make Pip jealous. Matched by bundle id (preferred) or, as a
+/// fallback, a substring of the file / Dock-tile name. Add a rival here and
+/// both trigger paths (Finder-drag onto Pip, cursor-over-Dock-icon) pick it up.
+enum Rival {
+    static let bundleIDs: Set<String> = ["com.openai.chat", "com.openai.codex"]
+    static let nameNeedles = ["chatgpt", "codex"]
+
+    static func matches(bundleID: String?) -> Bool {
+        guard let id = bundleID else { return false }
+        return bundleIDs.contains(id)
+    }
+    static func matches(name: String) -> Bool {
+        let n = name.lowercased()
+        return nameNeedles.contains { n.contains($0) }
+    }
+}
 
 /// Borderless, transparent, non-activating panel — floats above other windows
 /// without ever stealing focus.
@@ -34,6 +52,34 @@ final class MascotContainerView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         controller?.dragEnded(event)
+    }
+
+    // MARK: - Drag destination (easter egg)
+    // Dragging a rival app icon (ChatGPT, Codex) over Pip makes him lose it. We never accept
+    // the drop (operation stays empty, so the cursor shows the "no" badge — fitting),
+    // we only use the hover to provoke him. Works without Accessibility permission,
+    // independent of the Dock-hover rival path.
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if Self.draggingIsRival(sender) { controller?.rivalDraggedNear() }
+        return []
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if Self.draggingIsRival(sender) { controller?.rivalDraggedNear() }
+        return []
+    }
+
+    /// True when the dragged item is a rival app (by bundle id, falling back to
+    /// the file name) — matched against the pasteboard's file URLs.
+    static func draggingIsRival(_ sender: NSDraggingInfo) -> Bool {
+        let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        guard let urls = sender.draggingPasteboard
+            .readObjects(forClasses: [NSURL.self], options: opts) as? [URL] else { return false }
+        return urls.contains { url in
+            if Rival.matches(bundleID: Bundle(url: url)?.bundleIdentifier) { return true }
+            return Rival.matches(name: url.lastPathComponent)
+        }
     }
 }
 
@@ -95,6 +141,7 @@ final class MascotController: NSObject {
 
         let container = MascotContainerView(frame: NSRect(origin: .zero, size: Self.windowSize))
         container.controller = self
+        container.registerForDraggedTypes([.fileURL])   // ChatGPT-icon-dragged-near easter egg
         let hosting = NSHostingView(rootView: MascotRootView(model: model))
         hosting.frame = container.bounds
         hosting.autoresizingMask = [.width, .height]
@@ -134,13 +181,16 @@ final class MascotController: NSObject {
         tooltipTimer = t
         refreshTooltip()
 
-        // Watch for the ChatGPT app icon being dragged near him.
-        let rt = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
-            self?.pollRivalDrag()
+        // Fume whenever the cursor hovers the ChatGPT icon in the Dock. This
+        // reads the Dock's Accessibility tree, so prompt for permission once.
+        let axOpts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        let trusted = AXIsProcessTrustedWithOptions(axOpts)
+        let rt = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
+            self?.pollRivalHover()
         }
         RunLoop.main.add(rt, forMode: .common)
         rivalTimer = rt
-        Self.dlog("=== Pip launched; rival drag poll started ===")
+        Self.dlog("=== Pip launched; rival hover poll started; accessibilityTrusted=\(trusted) ===")
     }
 
     private func refreshTooltip() {
@@ -263,49 +313,82 @@ final class MascotController: NSObject {
         engine.goHome()
     }
 
-    // MARK: - Rival detection (drag the ChatGPT app icon near Pip → he gets mad)
+    // MARK: - Rival detection (cursor over the ChatGPT Dock icon → Pip gets mad)
     //
-    // A borderless non-activating panel doesn't receive drag-and-drop events, so
-    // instead we poll the system drag pasteboard while the mouse button is held:
-    // if a ChatGPT file is being dragged and the cursor is over/near Pip, fume.
+    // We locate the ChatGPT tile in the Dock via the Accessibility API, cache
+    // its on-screen frame, and fume whenever the cursor is over it. Needs
+    // Accessibility permission (prompted at launch); without it AX queries fail
+    // and Pip simply never finds the icon.
 
-    private var rivalDragLive = false
-    private var lastDragChange = -1
+    private var rivalIconFrame: CGRect?                       // ChatGPT Dock tile, AppKit (bottom-left) coords
+    private var rivalFrameRefreshedAt: TimeInterval = 0
+    private var rivalIconLogged = false
 
-    private func pollRivalDrag() {
-        let pb = NSPasteboard(name: .drag)
-        guard NSEvent.pressedMouseButtons & 0x1 != 0 else {   // only during an active drag
-            rivalDragLive = false
-            lastDragChange = pb.changeCount
-            return
-        }
-        if pb.changeCount != lastDragChange {                 // a new drag just started
-            lastDragChange = pb.changeCount
-            rivalDragLive = pasteboardHasRival(pb)
-            Self.dlog("DRAG start change=\(pb.changeCount) rival=\(rivalDragLive) types=\(pb.types ?? [])")
-        }
-        guard rivalDragLive else { return }
-        let zone = panel.frame.insetBy(dx: -130, dy: -130)    // generous: dragging toward him counts
-        let near = zone.contains(NSEvent.mouseLocation)
-        Self.dlog("rival live near=\(near) cursor=\(NSEvent.mouseLocation) frame=\(panel.frame)")
-        if near { engine.provokeByRival() }
+    /// Easter egg entry point: a rival app icon was dragged over Pip's window.
+    /// Provoke him. Throttled-logged so the drag stream stays quiet.
+    private var rivalDragLogged = false
+    func rivalDraggedNear() {
+        if !rivalDragLogged { rivalDragLogged = true; Self.dlog("rival icon dragged near Pip → fuming") }
+        engine.provokeByRival()
     }
 
-    private func pasteboardHasRival(_ pb: NSPasteboard) -> Bool {
-        var hay: [String] = []
-        if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] {
-            for u in urls {
-                hay.append(u.absoluteString)
-                if u.isFileURL, let id = Bundle(url: u)?.bundleIdentifier { hay.append(id) }
+    private func pollRivalHover() {
+        let now = CACurrentMediaTime()
+        // The tile only moves when the Dock changes (app opens/closes, resize),
+        // so relocating once every ~1.5s is plenty; the hover test is cheap.
+        if rivalIconFrame == nil || now - rivalFrameRefreshedAt > 1.5 {
+            rivalFrameRefreshedAt = now
+            rivalIconFrame = locateRivalDockIcon()
+            if let f = rivalIconFrame, !rivalIconLogged {
+                rivalIconLogged = true
+                Self.dlog("ChatGPT Dock icon located at \(f)")
             }
         }
-        if let files = pb.propertyList(forType: .init("NSFilenamesPboardType")) as? [String] { hay += files }
-        for t in ["public.file-url", "public.url", "Apple URL pasteboard type",
-                  "com.apple.pasteboard.promised-file-url", "public.utf8-plain-text", "public.url-name"] {
-            if let s = pb.string(forType: .init(t)) { hay.append(s) }
+        guard let frame = rivalIconFrame else { return }
+        if frame.contains(NSEvent.mouseLocation) { engine.provokeByRival() }
+    }
+
+    /// Walks the Dock's Accessibility tree for a rival tile (ChatGPT, Codex) and
+    /// returns its frame in AppKit (bottom-left origin) screen coordinates, or nil.
+    private func locateRivalDockIcon() -> CGRect? {
+        guard AXIsProcessTrusted() else { return nil }
+        guard let dock = NSRunningApplication
+                .runningApplications(withBundleIdentifier: "com.apple.dock").first else { return nil }
+        let app = AXUIElementCreateApplication(dock.processIdentifier)
+        guard let el = findRivalElement(in: app, depth: 0), let cg = axFrame(of: el) else { return nil }
+        // AX positions are top-left origin (Quartz global); flip to AppKit's
+        // bottom-left using the primary screen's height.
+        let primaryH = (NSScreen.screens.first { $0.frame.origin == .zero } ?? NSScreen.main)?
+            .frame.height ?? cg.maxY
+        return CGRect(x: cg.minX, y: primaryH - cg.maxY, width: cg.width, height: cg.height)
+    }
+
+    private func findRivalElement(in el: AXUIElement, depth: Int) -> AXUIElement? {
+        if depth > 4 { return nil }
+        var titleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(el, kAXTitleAttribute as CFString, &titleRef) == .success,
+           let title = titleRef as? String, Rival.matches(name: title) {
+            return el
         }
-        Self.dlog("haystack=\(hay)")
-        return hay.contains { let l = $0.lowercased(); return l.contains("chatgpt") || l.contains("openai") }
+        var childrenRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let children = childrenRef as? [AXUIElement] else { return nil }
+        for child in children {
+            if let found = findRivalElement(in: child, depth: depth + 1) { return found }
+        }
+        return nil
+    }
+
+    private func axFrame(of el: AXUIElement) -> CGRect? {
+        var posRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &posRef) == .success,
+              AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sizeRef) == .success
+        else { return nil }
+        var pos = CGPoint.zero, size = CGSize.zero
+        AXValueGetValue(posRef as! AXValue, .cgPoint, &pos)
+        AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
+        return CGRect(origin: pos, size: size)
     }
 
     static func dlog(_ s: String) {

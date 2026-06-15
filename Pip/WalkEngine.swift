@@ -161,7 +161,7 @@ final class WalkEngine: NSObject {
     static let fumeDuration: ClosedRange<Double> = 2.6...4.4    // a fuming fit, planted at you
     static let madStompRange: ClosedRange<Double> = 1.0...2.0   // brief angry stomp between fits
 
-    // Easter egg: drag the ChatGPT app icon near Pip and he loses it.
+    // Easter egg: drag a rival app icon (ChatGPT, Codex) near Pip and he loses it.
     private var provokedUntil: TimeInterval = 0
     private var rivalBubbleNextAt: TimeInterval = 0
     static let provokeHold: Double = 4.0
@@ -337,7 +337,7 @@ final class WalkEngine: NSObject {
         // Mood is cheap but no need to recompute 60×/sec.
         if now - lastMoodCheck > 1.0 {
             lastMoodCheck = now
-            let provoked = now < provokedUntil          // ChatGPT brought near him
+            let provoked = now < provokedUntil          // rival brought near him
             currentAnger = provoked ? 1.0 : store.angerLevel()   // drives the fuming tier
             let newMood = provoked ? .mad : store.mood()
             if newMood != currentMoodValue {
