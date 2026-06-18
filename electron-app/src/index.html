@@ -209,7 +209,10 @@
 
         engine.tick(timestamp);
 
-        const groundY = screenInfo.y + screenInfo.height - 230 * pipScale + 1;
+        // Lift the resting line a little off the very bottom edge so Pip's feet aren't
+        // clipped by the screen edge or a dock/taskbar sitting there.
+        const BOTTOM_MARGIN = 40;
+        const groundY = screenInfo.y + screenInfo.height - 230 * pipScale + 1 - BOTTOM_MARGIN;
 
         if (drag.active) {
           // Pointer handlers move the window while Pip is held; nothing to do here.
