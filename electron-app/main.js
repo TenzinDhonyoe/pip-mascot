@@ -236,9 +236,11 @@ ipcMain.on('set-ignore-mouse-events', (event, ignore, options) => {
 
 ipcMain.on('move-window', (event, x, y) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  if (win && !win.isDestroyed()) {
-    win.setPosition(Math.round(x), Math.round(y));
-  }
+  if (!win || win.isDestroyed()) return;
+  // Guard against NaN/Infinity — setPosition throws a "conversion failure" that
+  // crashes the whole main process, so just ignore a bad move.
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  win.setPosition(Math.round(x), Math.round(y));
 });
 
 // Right-clicking Pip opens the same menu as the tray — handy when the desktop

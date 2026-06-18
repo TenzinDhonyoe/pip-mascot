@@ -214,6 +214,12 @@
         const BOTTOM_MARGIN = 40;
         const groundY = screenInfo.y + screenInfo.height - 230 * pipScale + 1 - BOTTOM_MARGIN;
 
+        // Self-heal: if any coordinate ever goes non-finite, snap back to a sane spot
+        // rather than feeding NaN to the window (which would otherwise freeze Pip).
+        if (!Number.isFinite(engine.x)) engine.x = screenInfo.x + screenInfo.width / 2;
+        if (!Number.isFinite(currentWindowX)) currentWindowX = engine.x;
+        if (!Number.isFinite(currentWindowY)) currentWindowY = groundY;
+
         if (drag.active) {
           // Pointer handlers move the window while Pip is held; nothing to do here.
         } else if (dropping) {
