@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Pip
+GenericName=Desktop Mascot
+Comment=A Claude-usage-aware desktop mascot that walks along your screen
+Exec=@@LAUNCH@@
+Icon=@@ICON@@
+Terminal=false
+Categories=Utility;
+StartupNotify=false

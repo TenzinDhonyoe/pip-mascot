@@ -1,0 +1,40 @@
+{
+  "name": "pip-mascot",
+  "version": "2.0.0",
+  "description": "Pip 🐾 — a Claude-usage-aware desktop mascot (Electron cross-platform port)",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "start:dev": "electron --enable-logging .",
+    "build": "electron-builder",
+    "build:linux": "electron-builder --linux",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.nous.pip-mascot",
+    "productName": "Pip",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "assets/**/*",
+      "node_modules/**/*"
+    ],
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Utility"
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.utilities"
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}

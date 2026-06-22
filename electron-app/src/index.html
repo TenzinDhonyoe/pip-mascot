@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pip</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      width: 280px;
+      height: 230px;
+      overflow: hidden;
+      background: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+      font-family: "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+
+    #app {
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    #bubble-overlay {
+      position: absolute;
+      top: 2px;
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: none;
+      z-index: 10;
+      transition: top 0.15s ease;
+    }
+
+    .speech-bubble {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .speech-bubble .text {
+      font-size: 11px;
+      font-weight: 600;
+      color: rgb(51, 48, 43);
+      text-align: center;
+      padding: 7px 11px;
+      background: rgb(248, 246, 241);
+      border-radius: 12px;
+      border: 1px solid rgba(204, 120, 92, 0.22);
+      box-shadow: 0 1.5px 4px rgba(51, 48, 43, 0.20);
+      max-width: 240px;
+    }
+
+    .speech-bubble .arrow {
+      width: 0;
+      height: 0;
+      border-left: 6.5px solid transparent;
+      border-right: 6.5px solid transparent;
+      border-top: 7px solid rgb(248, 246, 241);
+    }
+
+    .usage-badge {
+      background: rgb(248, 246, 241);
+      border-radius: 13px;
+      border: 1px solid rgba(204, 120, 92, 0.22);
+      box-shadow: 0 2px 6px rgba(51, 48, 43, 0.20);
+      padding: 9px 11px;
+      font-size: 11px;
+      color: rgb(51, 48, 43);
+      min-width: 120px;
+    }
+
+    .usage-badge .header {
+      font-size: 8.5px;
+      font-weight: 800;
+      letter-spacing: 1.4px;
+      color: rgb(204, 120, 92);
+      margin-bottom: 6px;
+    }
+
+    .usage-badge .stat-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 2px;
+    }
+
+    .usage-badge .stat-label {
+      font-weight: 800;
+      width: 18px;
+    }
+
+    .usage-badge .meter-bg {
+      width: 46px;
+      height: 6px;
+      background: rgba(204, 120, 92, 0.16);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .usage-badge .meter-fill {
+      height: 100%;
+      border-radius: 3px;
+    }
+
+    .usage-badge .stat-pct {
+      font-weight: 700;
+      width: 28px;
+      text-align: right;
+    }
+
+    .usage-badge .stat-reset {
+      font-size: 9px;
+      color: rgba(51, 48, 43, 0.45);
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <canvas id="mascot-canvas" width="280" height="230"></canvas>
+    <div id="bubble-overlay"></div>
+  </div>
+
+  <script type="module">
+    import { UsageStore } from './usage-store.js';
+    import { WalkEngine } from './walk-engine.js';
+    import { Renderer } from './renderer.js';
+    import { Sprites } from './sprites.js';
+    import { OAuthPoller } from './oauth-poller.js';
+    import { Mood } from './mood.js';
+
+    // ── Globals ────────────────────────────────────────────────────────────
+    const canvas = document.getElementById('mascot-canvas');
+    const renderer = new Renderer(canvas);
+    const store = new UsageStore();
+    const engine = new WalkEngine(store);
+    const poller = new OAuthPoller(store);
+
+    let screenInfo = { x: 0, y: 0, width: 1920, height: 1080 };
+    let currentWindowX = 0;
+    let currentWindowY = 0;
+    let pipScale = 1;  // set from the tray "Size" menu; scales the window geometry
+
+    // Drag-to-pickup state. While `drag.active`, the pointer handlers own the window
+    // position; after release `dropping` runs a short gravity fall back to the ground.
+    const drag = { active: false, grabX: 0, grabY: 0, lastX: 0, lastY: 0, lastT: 0 };
+    let dropping = false;
+    let dropVy = 0;
+    const DROP_GRAVITY = 2800;   // px/s²
+    const DROP_TERMINAL = 3000;  // px/s
+
+    // ── Wire pose → canvas + bubble ────────────────────────────────────────
+    engine.onPoseUpdate((pose) => {
+      renderer.draw(pose);
+      updateBubble(pose);
+    });
+
+    // ── Initialize ─────────────────────────────────────────────────────────
+    async function init() {
+      // Load sprites
+      const loaded = await Sprites.loadAll();
+      console.log('Sprites loaded:', loaded.length, 'total');
+
+      // Get screen info from main process
+      if (window.pip) {
+        try {
+          screenInfo = await window.pip.getScreenInfo();
+          console.log('Screen:', screenInfo);
+        } catch (e) {
+          console.warn('Could not get screen info:', e);
+        }
+      }
+
+      // Calculate starting position: bottom-left, peeking from behind edge
+      // Use test mode to start walking in the middle (visible immediately)
+      const visibleRect = {
+        x: screenInfo.x,
+        y: screenInfo.y,
+        width: screenInfo.width,
+        height: screenInfo.height - 230 // effective walkable area
+      };
+      const pos = engine.startPosition(visibleRect, true);
+      engine.x = pos.x;
+
+      currentWindowX = pos.x;
+      currentWindowY = pos.y;
+
+      // Place the window at the starting position
+      if (window.pip) {
+        window.pip.moveWindow(pos.x, pos.y);
+      }
+
+      // Start poller
+      poller.start();
+
+      // ── Animation loop ──────────────────────────────────────────────────
+      function loop(timestamp) {
+        // Window is 280×230 logical px scaled by pipScale, so the screen-edge and
+        // ground math scales too (the page itself is zoomed to match in the main process).
+        const winW = 280 * pipScale;
+        const margin = ((280 - 110) / 2) * pipScale;
+        const minX = screenInfo.x - margin;
+        const maxX = screenInfo.x + screenInfo.width + margin - winW;
+
+        engine.tick(timestamp);
+
+        // Lift the resting line a little off the very bottom edge so Pip's feet aren't
+        // clipped by the screen edge or a dock/taskbar sitting there.
+        const BOTTOM_MARGIN = 40;
+        const groundY = screenInfo.y + screenInfo.height - 230 * pipScale + 1 - BOTTOM_MARGIN;
+
+        // Self-heal: if any coordinate ever goes non-finite, snap back to a sane spot
+        // rather than feeding NaN to the window (which would otherwise freeze Pip).
+        if (!Number.isFinite(engine.x)) engine.x = screenInfo.x + screenInfo.width / 2;
+        if (!Number.isFinite(currentWindowX)) currentWindowX = engine.x;
+        if (!Number.isFinite(currentWindowY)) currentWindowY = groundY;
+
+        if (drag.active) {
+          // Pointer handlers move the window while Pip is held; nothing to do here.
+        } else if (dropping) {
+          // Gravity fall back to the ground after being let go.
+          const dt = 1 / 60;
+          dropVy = Math.min(DROP_TERMINAL, dropVy + DROP_GRAVITY * dt);
+          currentWindowY += dropVy * dt;
+          if (currentWindowY >= groundY) {
+            currentWindowY = groundY;
+            dropping = false;
+            dropVy = 0;
+            engine.endDrag();  // play the landing squash, then resume walking
+            setTimeout(() => { if (engine.state === 'landing') engine.state = 'walking'; }, 550);
+          }
+          if (window.pip) window.pip.moveWindow(currentWindowX, currentWindowY);
+        } else {
+          if ((engine.facing > 0 && engine.x >= maxX) ||
+              (engine.facing < 0 && engine.x <= minX)) {
+            if (engine.state === 'walking') engine.beginTurn();
+          }
+
+          if (Math.abs(engine.x - currentWindowX) > 0.5) {
+            currentWindowX = engine.x;
+            currentWindowY = groundY + (engine.state === 'peeking' || engine.state === 'tuckingIn' ? 72 * pipScale : 0);
+            if (window.pip) window.pip.moveWindow(currentWindowX, currentWindowY);
+          }
+        }
+
+        // Log every 2 seconds
+        if (Math.floor(timestamp / 1000) % 2 === 0) {
+          console.log('tick', engine.state, engine.x.toFixed(1), engine.facing, 'mood', engine.currentMood);
+        }
+
+        requestAnimationFrame(loop);
+      }
+      requestAnimationFrame(loop);
+    }
+
+    // ── Bubble overlay ─────────────────────────────────────────────────────
+    function updateBubble(pose) {
+      const overlay = document.getElementById('bubble-overlay');
+      overlay.style.top = (2 + pose.badgeDrop) + 'px';
+
+      if (pose.bubbleText && !pose.showBadge) {
+        overlay.innerHTML = `
+          <div class="speech-bubble">
+            <div class="text">${escapeHtml(pose.bubbleText)}</div>
+            <div class="arrow"></div>
+          </div>`;
+      } else if (pose.showBadge) {
+        const color = (pct) => {
+          if (pct >= 90) return 'rgb(199, 74, 64)';
+          if (pct >= 70) return 'rgb(222, 140, 69)';
+          return 'rgb(204, 120, 92)';
+        };
+
+        let body = '';
+        if (pose.badgeNote) {
+          body = `<div style="font-size:10.5px;color:rgba(51,48,43,0.7);max-width:150px">${escapeHtml(pose.badgeNote)}</div>`;
+        } else {
+          body = pose.badgeStats.map(s => `
+            <div class="stat-row">
+              <span class="stat-label">${escapeHtml(s.label)}</span>
+              <div class="meter-bg"><div class="meter-fill" style="width:${Math.max(3, Math.min(100, s.pct))}%;background:${color(s.pct)}"></div></div>
+              <span class="stat-pct" style="color:${color(s.pct)}">${Math.round(s.pct)}%</span>
+              <span class="stat-reset">${escapeHtml(s.resets)}</span>
+            </div>`).join('');
+        }
+
+        overlay.innerHTML = `
+          <div class="usage-badge">
+            <div class="header">USAGE</div>
+            ${body}
+          </div>`;
+      } else {
+        overlay.innerHTML = '';
+      }
+    }
+
+    function escapeHtml(s) {
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    // ── IPC listeners ─────────────────────────────────────────────────────
+    if (window.pip) {
+      window.pip.onTogglePause(() => {
+        engine.paused = !engine.paused;
+      });
+      window.pip.onRefreshUsage(() => {
+        poller.pollNow();
+      });
+      window.pip.onToggleBadge(() => {
+        engine.showBadgePersistent = !engine.showBadgePersistent;
+      });
+      window.pip.onSetScale((s) => {
+        pipScale = s;
+        // Force the next frame to reposition so Pip stays on the ground line even
+        // if it's standing still when resized.
+        currentWindowX = -1e9;
+      });
+    }
+
+    // ── Drag: pick Pip up and carry him anywhere ────────────────────────────
+    // Pointer capture keeps events flowing even when the cursor outruns the window.
+    canvas.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+      drag.active = true;
+      dropping = false;
+      drag.grabX = e.screenX - currentWindowX;
+      drag.grabY = e.screenY - currentWindowY;
+      drag.lastX = e.screenX;
+      drag.lastY = e.screenY;
+      drag.lastT = performance.now() / 1000;
+      engine.beginDrag();
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!drag.active) return;
+      const now = performance.now() / 1000;
+      engine.noteDragMove(e.screenX - drag.lastX, e.screenY - drag.lastY, now - drag.lastT);
+      drag.lastX = e.screenX;
+      drag.lastY = e.screenY;
+      drag.lastT = now;
+      currentWindowX = e.screenX - drag.grabX;
+      currentWindowY = e.screenY - drag.grabY;
+      engine.x = currentWindowX;  // keep the engine's horizontal position in sync
+      if (window.pip) window.pip.moveWindow(currentWindowX, currentWindowY);
+    });
+
+    function releasePip(e) {
+      if (!drag.active) return;
+      drag.active = false;
+      try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+      dropVy = Math.max(0, engine.dragVY || 0);  // carry any downward throw velocity
+      dropping = true;
+      engine.state = 'falling';
+    }
+    canvas.addEventListener('pointerup', releasePip);
+    canvas.addEventListener('pointercancel', releasePip);
+
+    // Right-click Pip → the tray menu (Quit, Size, …) at the cursor.
+    canvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (window.pip) window.pip.showContextMenu();
+    });
+
+    // Double-click Pip to quit — a guaranteed escape hatch that works wherever
+    // the tray icon or popup menu don't (uses the same pointer path as dragging).
+    canvas.addEventListener('dblclick', () => {
+      if (window.pip) window.pip.quitApp();
+    });
+
+    // ── Start! ────────────────────────────────────────────────────────────
+    init().catch(err => {
+      console.error('Init failed:', err);
+      // Fallback animation loop without full init
+      requestAnimationFrame(function loop(timestamp) {
+        engine.tick(timestamp);
+        requestAnimationFrame(loop);
+      });
+    });
+  </script>
+</body>
+</html>

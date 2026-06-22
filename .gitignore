@@ -16,3 +16,8 @@ Pip.xcodeproj/xcuserdata/
 # Release packaging scratch
 *.zip
 dist/
+
+# Node / Electron
+node_modules/
+npm-debug.log*
+*.log
